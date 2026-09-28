@@ -64,6 +64,14 @@ describe('GET / HEAD', () => {
 		const suffix = await dav('alice', 'GET', '/hello.txt', { Range: 'bytes=-6' });
 		expect(suffix.headers.get('Content-Range')).toBe('bytes 7-12/13');
 		expect(await response.text()).toBe('world');
+
+		const unsatisfiable = await dav('alice', 'GET', '/hello.txt', { Range: 'bytes=100-200' });
+		expect(unsatisfiable.status).toBe(416);
+		expect(unsatisfiable.headers.get('Content-Range')).toBe('bytes */13');
+
+		const open = await dav('alice', 'GET', '/hello.txt', { Range: 'bytes=7-' });
+		expect(open.headers.get('Content-Range')).toBe('bytes 7-12/13');
+		expect((await dav('alice', 'GET', '/hello.txt', { Range: 'bytes=5-2' })).status).toBe(200);
 	});
 
 	it('revalidates with If-None-Match', async () => {
