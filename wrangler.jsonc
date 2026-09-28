@@ -4,7 +4,7 @@
  */
 {
 	"$schema": "node_modules/wrangler/config-schema.json",
-	"name": "workers-webdav",
+	"name": "webdav",
 	"main": "src/index.ts",
 	"compatibility_date": "2026-09-26",
 	"observability": {

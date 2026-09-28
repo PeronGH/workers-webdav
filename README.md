@@ -30,7 +30,7 @@ This prints each username with its password. Rotating `AUTH_SECRET` changes ever
 Use the Worker URL with the minted username and password, for example with rclone:
 
 ```sh
-rclone lsf --webdav-url https://workers-webdav.<account>.workers.dev \
+rclone lsf --webdav-url https://webdav.<account>.workers.dev \
   --webdav-user alice --webdav-pass "$(rclone obscure <password>)" :webdav:
 ```
 
