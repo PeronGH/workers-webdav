@@ -1,18 +1,21 @@
 import { authenticate } from './auth';
 import { handleGet, handleHead } from './get';
-import { hasBody, HttpError } from './http';
-import { handlePropfind } from './propfind';
+import { ALLOW, hasBody, HttpError } from './http';
+import { handleLock, handleUnlock } from './lock';
+import { handlePropfind, handleProppatch } from './propfind';
 import { parseTarget } from './storage';
+import { handleCopyMove, handleDelete, handleMkcol, handlePut } from './write';
 
-const ALLOW = 'OPTIONS, GET, HEAD, PROPFIND';
+const METHODS = new Set(ALLOW.split(', '));
+const BODY_METHODS = new Set(['PROPFIND', 'PROPPATCH', 'PUT', 'LOCK']);
 
 async function handle(request: Request, env: Env): Promise<Response> {
 	const { method } = request;
-	if (!['OPTIONS', 'GET', 'HEAD', 'PROPFIND'].includes(method)) throw new HttpError(405, null, { Allow: ALLOW });
-	if (method !== 'PROPFIND' && hasBody(request)) throw new HttpError(415);
+	if (!METHODS.has(method)) throw new HttpError(405, null, { Allow: ALLOW });
+	if (!BODY_METHODS.has(method) && hasBody(request)) throw new HttpError(415);
 
 	if (method === 'OPTIONS') {
-		return new Response(null, { headers: { DAV: '1', Allow: ALLOW, 'MS-Author-Via': 'DAV' } });
+		return new Response(null, { headers: { DAV: '1, 2', Allow: ALLOW, 'MS-Author-Via': 'DAV' } });
 	}
 
 	const user = await authenticate(request, env.AUTH_SECRET);
@@ -20,14 +23,31 @@ async function handle(request: Request, env: Env): Promise<Response> {
 		throw new HttpError(401, null, { 'WWW-Authenticate': 'Basic realm="WebDAV", charset="UTF-8"' });
 	}
 
+	const bucket = env.BUCKET;
 	const target = parseTarget(new URL(request.url).pathname);
 	switch (method) {
 		case 'GET':
-			return handleGet(request, env.BUCKET, user, target);
+			return handleGet(request, bucket, user, target);
 		case 'HEAD':
-			return handleHead(env.BUCKET, user, target);
+			return handleHead(bucket, user, target);
+		case 'PROPFIND':
+			return handlePropfind(request, bucket, user, target);
+		case 'PROPPATCH':
+			return handleProppatch(request, bucket, user, target);
+		case 'PUT':
+			return handlePut(request, bucket, user, target);
+		case 'DELETE':
+			return handleDelete(request, bucket, user, target);
+		case 'MKCOL':
+			return handleMkcol(bucket, user, target);
+		case 'COPY':
+			return handleCopyMove(request, bucket, user, target, false);
+		case 'MOVE':
+			return handleCopyMove(request, bucket, user, target, true);
+		case 'LOCK':
+			return handleLock(request, bucket, user, target);
 		default:
-			return handlePropfind(request, env.BUCKET, user, target);
+			return handleUnlock(request);
 	}
 }
 

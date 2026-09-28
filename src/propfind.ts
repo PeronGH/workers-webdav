@@ -1,34 +1,14 @@
-import { DOMParser, onErrorStopParsing, ParseError, type Element } from '@xmldom/xmldom';
 import { HttpError } from './http';
+import { SUPPORTED_LOCK } from './lock';
 import { displayName, href, listDir, stat, type Entry, type Target } from './storage';
-import { escapeXml, XML_HEADER } from './xml';
-
-const DAV = 'DAV:';
-
-interface PropName {
-	namespace: string;
-	local: string;
-}
+import { childElements, DAV, escapeXml, multistatus, parseDavXml, propElement, propName, propstat, XML_HEADER, type PropName } from './xml';
 
 type PropfindRequest = { type: 'allprop' } | { type: 'propname' } | { type: 'prop'; props: PropName[] };
-
-function childElements(element: Element): Element[] {
-	return Array.from(element.childNodes).filter((node): node is Element => node.nodeType === node.ELEMENT_NODE);
-}
 
 export function parsePropfind(body: string): PropfindRequest {
 	if (body.trim() === '') return { type: 'allprop' };
 
-	let root: Element | null;
-	try {
-		root = new DOMParser({ onError: onErrorStopParsing }).parseFromString(body, 'application/xml').documentElement;
-	} catch (error) {
-		if (error instanceof ParseError) throw new HttpError(400);
-		throw error;
-	}
-	if (root?.namespaceURI !== DAV || root.localName !== 'propfind') throw new HttpError(400);
-
-	for (const child of childElements(root)) {
+	for (const child of childElements(parseDavXml(body, 'propfind'))) {
 		if (child.namespaceURI !== DAV) continue;
 		switch (child.localName) {
 			case 'allprop':
@@ -36,10 +16,7 @@ export function parsePropfind(body: string): PropfindRequest {
 			case 'propname':
 				return { type: 'propname' };
 			case 'prop':
-				return {
-					type: 'prop',
-					props: childElements(child).map((prop) => ({ namespace: prop.namespaceURI ?? '', local: prop.localName ?? prop.nodeName })),
-				};
+				return { type: 'prop', props: childElements(child).map(propName) };
 		}
 	}
 	throw new HttpError(400);
@@ -50,6 +27,9 @@ function liveProps(entry: Entry): Map<string, string> {
 	const props = new Map<string, string>([
 		['displayname', escapeXml(displayName(entry))],
 		['resourcetype', entry.type === 'dir' ? '<D:collection/>' : ''],
+		['supportedlock', SUPPORTED_LOCK],
+		// Locks are stateless, so there is never an active lock to report.
+		['lockdiscovery', ''],
 	]);
 	if (entry.type === 'file') {
 		const { object } = entry;
@@ -61,16 +41,6 @@ function liveProps(entry: Entry): Map<string, string> {
 	return props;
 }
 
-function element(name: PropName, value = ''): string {
-	const tag = name.namespace === DAV ? `D:${name.local}` : name.namespace === '' ? name.local : `x:${name.local}`;
-	const xmlns = name.namespace === DAV ? '' : ` xmlns${name.namespace === '' ? '' : ':x'}="${escapeXml(name.namespace)}"`;
-	return value === '' ? `<${tag}${xmlns}/>` : `<${tag}${xmlns}>${value}</${tag}>`;
-}
-
-function propstat(props: string[], status: string): string {
-	return `<D:propstat><D:prop>${props.join('')}</D:prop><D:status>HTTP/1.1 ${status}</D:status></D:propstat>`;
-}
-
 function response(entry: Entry, request: PropfindRequest): string {
 	const live = liveProps(entry);
 	const propstats: string[] = [];
@@ -78,7 +48,7 @@ function response(entry: Entry, request: PropfindRequest): string {
 		case 'allprop':
 			propstats.push(
 				propstat(
-					[...live].map(([local, value]) => element({ namespace: DAV, local }, value)),
+					[...live].map(([local, value]) => propElement({ namespace: DAV, local }, value)),
 					'200 OK',
 				),
 			);
@@ -86,7 +56,7 @@ function response(entry: Entry, request: PropfindRequest): string {
 		case 'propname':
 			propstats.push(
 				propstat(
-					[...live.keys()].map((local) => element({ namespace: DAV, local })),
+					[...live.keys()].map((local) => propElement({ namespace: DAV, local })),
 					'200 OK',
 				),
 			);
@@ -96,8 +66,8 @@ function response(entry: Entry, request: PropfindRequest): string {
 			const missing: string[] = [];
 			for (const name of request.props) {
 				const value = name.namespace === DAV ? live.get(name.local) : undefined;
-				if (value === undefined) missing.push(element(name));
-				else found.push(element(name, value));
+				if (value === undefined) missing.push(propElement(name));
+				else found.push(propElement(name, value));
 			}
 			if (found.length > 0) propstats.push(propstat(found, '200 OK'));
 			if (missing.length > 0) propstats.push(propstat(missing, '404 Not Found'));
@@ -121,6 +91,40 @@ export async function handlePropfind(request: Request, bucket: R2Bucket, user: s
 	}
 
 	const entries = entry.type === 'dir' && depth === '1' ? [entry, ...(await listDir(bucket, user, entry.path))] : [entry];
-	const body = `${XML_HEADER}<D:multistatus xmlns:D="DAV:">${entries.map((e) => response(e, propfind)).join('')}</D:multistatus>`;
-	return new Response(body, { status: 207, headers: { 'Content-Type': 'application/xml; charset=utf-8' } });
+	return multistatus(entries.map((e) => response(e, propfind)));
+}
+
+/**
+ * Dead properties are accepted and discarded, since clients such as the Windows Mini-Redirector treat PROPPATCH
+ * failures as save errors. DAV: properties are live and protected, which fails the whole request atomically.
+ */
+export async function handleProppatch(request: Request, bucket: R2Bucket, user: string, target: Target): Promise<Response> {
+	const root = parseDavXml(await request.text(), 'propertyupdate');
+	const entry = await stat(bucket, user, target);
+	if (!entry) throw new HttpError(404);
+
+	const names = childElements(root)
+		.filter((child) => child.namespaceURI === DAV && (child.localName === 'set' || child.localName === 'remove'))
+		.flatMap((instruction) => childElements(instruction, 'prop'))
+		.flatMap((prop) => childElements(prop).map(propName));
+	if (names.length === 0) throw new HttpError(400);
+
+	const protectedNames = names.filter((name) => name.namespace === DAV);
+	const deadNames = names.filter((name) => name.namespace !== DAV);
+	const groups: [PropName[], string][] =
+		protectedNames.length > 0
+			? [
+					[protectedNames, '403 Forbidden'],
+					[deadNames, '424 Failed Dependency'],
+				]
+			: [[deadNames, '200 OK']];
+	const propstats = groups
+		.filter(([group]) => group.length > 0)
+		.map(([group, status]) =>
+			propstat(
+				group.map((name) => propElement(name)),
+				status,
+			),
+		);
+	return multistatus([`<D:response><D:href>${escapeXml(href(entry))}</D:href>${propstats.join('')}</D:response>`]);
 }

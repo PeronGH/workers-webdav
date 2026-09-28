@@ -15,3 +15,5 @@ export class HttpError extends Error {
 export function hasBody(request: Request): boolean {
 	return Number(request.headers.get('Content-Length') ?? 0) > 0 || request.headers.has('Transfer-Encoding');
 }
+
+export const ALLOW = 'OPTIONS, GET, HEAD, PROPFIND, PROPPATCH, PUT, DELETE, MKCOL, COPY, MOVE, LOCK, UNLOCK';

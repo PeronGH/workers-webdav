@@ -28,11 +28,42 @@ export function objectKey(user: string, path: string[]): string {
 	return [user, ...path].join('/');
 }
 
-function dirPrefix(user: string, path: string[]): string {
+export function dirPrefix(user: string, path: string[]): string {
 	return `${objectKey(user, path)}/`;
 }
 
-export function href(entry: Entry): string {
+export const CREATE_ONLY = (): Headers => new Headers({ 'If-None-Match': '*' });
+
+/** Every object below a collection, including its folder marker, at any depth. */
+export async function listTree(bucket: R2Bucket, user: string, path: string[]): Promise<R2Object[]> {
+	const prefix = dirPrefix(user, path);
+	const objects: R2Object[] = [];
+	let cursor: string | undefined;
+	do {
+		const page = await bucket.list({ prefix, include: ['httpMetadata', 'customMetadata'], cursor });
+		objects.push(...page.objects);
+		cursor = page.truncated ? page.cursor : undefined;
+	} while (cursor !== undefined);
+	return objects;
+}
+
+export async function deleteKeys(bucket: R2Bucket, keys: string[]): Promise<void> {
+	for (let start = 0; start < keys.length; start += 1000) await bucket.delete(keys.slice(start, start + 1000));
+}
+
+export async function deleteTree(bucket: R2Bucket, user: string, path: string[]): Promise<void> {
+	await deleteKeys(
+		bucket,
+		(await listTree(bucket, user, path)).map((object) => object.key),
+	);
+}
+
+/** Creates the folder marker for `path`, so the collection survives after its last member is removed. */
+export async function keepDir(bucket: R2Bucket, user: string, path: string[]): Promise<void> {
+	if (path.length > 0) await bucket.put(dirPrefix(user, path), '', { onlyIf: CREATE_ONLY() });
+}
+
+export function href(entry: Pick<Entry, 'type' | 'path'>): string {
 	const encoded = entry.path.map(encodeURIComponent).join('/');
 	if (entry.type === 'file') return `/${encoded}`;
 	return entry.path.length === 0 ? '/' : `/${encoded}/`;

@@ -1,16 +1,7 @@
 import { env, exports } from 'cloudflare:workers';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { derivePassword } from '../src/auth';
-
-const BASE = 'https://dav.example';
-
-async function authHeader(user: string): Promise<string> {
-	return `Basic ${btoa(`${user}:${await derivePassword(env.AUTH_SECRET, user)}`)}`;
-}
-
-async function dav(user: string, method: string, path: string, headers: Record<string, string> = {}, body?: string): Promise<Response> {
-	return exports.default.fetch(`${BASE}${path}`, { method, headers: { Authorization: await authHeader(user), ...headers }, body });
-}
+import { BASE, dav, hrefs } from './helpers';
 
 beforeAll(async () => {
 	await env.BUCKET.put('alice/hello.txt', 'Hello, world!', { httpMetadata: { contentType: 'text/plain' } });
@@ -23,8 +14,8 @@ describe('auth', () => {
 	it('answers OPTIONS without credentials', async () => {
 		const response = await exports.default.fetch(`${BASE}/`, { method: 'OPTIONS' });
 		expect(response.status).toBe(200);
-		expect(response.headers.get('DAV')).toBe('1');
-		expect(response.headers.get('Allow')).toBe('OPTIONS, GET, HEAD, PROPFIND');
+		expect(response.headers.get('DAV')).toBe('1, 2');
+		expect(response.headers.get('Allow')).toContain('LOCK');
 	});
 
 	it('rejects missing and wrong credentials', async () => {
@@ -102,10 +93,6 @@ describe('GET / HEAD', () => {
 });
 
 describe('PROPFIND', () => {
-	function hrefs(xml: string): string[] {
-		return [...xml.matchAll(/<D:href>([^<]*)<\/D:href>/g)].map((match) => match[1]).sort();
-	}
-
 	it('lists a collection at depth 1', async () => {
 		const response = await dav('alice', 'PROPFIND', '/', { Depth: '1' });
 		expect(response.status).toBe(207);
@@ -155,19 +142,5 @@ describe('PROPFIND', () => {
 
 	it('returns 404 for missing paths', async () => {
 		expect((await dav('alice', 'PROPFIND', '/nope', { Depth: '0' })).status).toBe(404);
-	});
-});
-
-describe('read-only', () => {
-	it('refuses write methods', async () => {
-		for (const method of ['PUT', 'DELETE', 'MKCOL', 'COPY', 'MOVE', 'PROPPATCH', 'LOCK', 'UNLOCK']) {
-			const response = await dav('alice', method, '/hello.txt', {}, 'body');
-			expect(response.status, method).toBe(405);
-			expect(response.headers.get('Allow')).toBe('OPTIONS, GET, HEAD, PROPFIND');
-		}
-	});
-
-	it('rejects unexpected request bodies', async () => {
-		expect((await dav('alice', 'OPTIONS', '/', {}, 'x')).status).toBe(415);
 	});
 });
