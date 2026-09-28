@@ -8,15 +8,15 @@
 	"main": "src/index.ts",
 	"compatibility_date": "2026-09-26",
 	"observability": {
-		"enabled": true
+		"enabled": true,
 	},
 	"upload_source_maps": true,
 	"r2_buckets": [
 		{
 			"binding": "BUCKET",
-			"bucket_name": "workers-webdav"
-		}
-	]
+			"bucket_name": "workers-webdav",
+		},
+	],
 	/**
 	 * Smart Placement
 	 * https://developers.cloudflare.com/workers/configuration/smart-placement/#smart-placement
