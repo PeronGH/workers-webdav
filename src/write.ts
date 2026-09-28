@@ -209,7 +209,14 @@ export async function handleCopyMove(request: Request, bucket: R2Bucket, user: s
 
 	const from = source.path.join('/');
 	const to = dest.path.join('/');
-	if (source.path.length === 0 || dest.path.length === 0 || to === from || (source.type === 'dir' && to.startsWith(`${from}/`))) {
+	// Overlapping trees are refused: replacing an ancestor would delete the source, and copying into a descendant recurses.
+	if (
+		source.path.length === 0 ||
+		dest.path.length === 0 ||
+		to === from ||
+		from.startsWith(`${to}/`) ||
+		(source.type === 'dir' && to.startsWith(`${from}/`))
+	) {
 		throw new HttpError(403);
 	}
 	const depth = request.headers.get('Depth');

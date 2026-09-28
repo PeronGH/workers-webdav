@@ -104,6 +104,17 @@ describe('COPY / MOVE', () => {
 		expect((await dav('erin', 'MOVE', '/e/', to('/e/inside/'))).status).toBe(403);
 	});
 
+	it('refuses to overwrite an ancestor of the source', async () => {
+		await env.BUCKET.put('erin/anc/b/file', 'f');
+		await env.BUCKET.put('erin/anc/sibling', 's');
+		for (const method of ['COPY', 'MOVE']) {
+			expect((await dav('erin', method, '/anc/b/', to('/anc/'))).status).toBe(403);
+			expect((await dav('erin', method, '/anc/b/file', to('/anc'))).status).toBe(403);
+		}
+		expect(await read('erin', '/anc/b/file')).toBe('f');
+		expect(await read('erin', '/anc/sibling')).toBe('s');
+	});
+
 	it('rejects foreign destinations', async () => {
 		await env.BUCKET.put('erin/f.txt', 'f');
 		expect((await dav('erin', 'COPY', '/f.txt', { Destination: 'https://elsewhere.example/f.txt' })).status).toBe(502);
