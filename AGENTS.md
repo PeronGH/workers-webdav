@@ -15,14 +15,15 @@ This project uses **Bun** (`bun.lock`). Use `bun install`, `bun add`, `bun remov
 
 ## Commands
 
-| Command                | Purpose                   |
-| ---------------------- | ------------------------- |
-| `bunx wrangler dev`    | Local development         |
-| `bunx wrangler deploy` | Deploy to Cloudflare      |
-| `bunx wrangler types`  | Generate TypeScript types |
-| `bun run test`         | Run tests (vitest)        |
-| `bun run lint`         | Lint (ESLint)             |
-| `bun run format`       | Format (Prettier)         |
+| Command                              | Purpose                                             |
+| ------------------------------------ | --------------------------------------------------- |
+| `bunx wrangler dev`                  | Local development                                   |
+| `bunx wrangler deploy`               | Deploy to Cloudflare                                |
+| `bunx wrangler types`                | Generate TypeScript types                           |
+| `bun run test`                       | Run tests (vitest)                                  |
+| `bun run lint`                       | Lint (ESLint)                                       |
+| `bun run format`                     | Format (Prettier)                                   |
+| `AUTH_SECRET=… bun run mint <user>…` | Print the derived Basic-auth password for each user |
 
 Run `wrangler types` after changing bindings in wrangler.jsonc.
 

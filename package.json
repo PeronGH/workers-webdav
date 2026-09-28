@@ -10,7 +10,8 @@
 		"cf-typegen": "wrangler types",
 		"lint": "eslint .",
 		"format": "prettier --write .",
-		"format:check": "prettier --check ."
+		"format:check": "prettier --check .",
+		"mint": "bun scripts/mint.ts"
 	},
 	"devDependencies": {
 		"@cloudflare/vitest-plugin": "^1.0.0",
@@ -24,5 +25,8 @@
 		"typescript-eslint": "^8.70.1",
 		"vitest": "~4.1.0",
 		"wrangler": "^4.143.0"
+	},
+	"dependencies": {
+		"@xmldom/xmldom": "^0.9.12"
 	}
 }
