@@ -74,6 +74,20 @@ describe('GET / HEAD', () => {
 		expect((await dav('alice', 'GET', '/hello.txt', { Range: 'bytes=5-2' })).status).toBe(200);
 	});
 
+	it('serves the whole file when If-Range does not match', async () => {
+		const head = await dav('alice', 'HEAD', '/hello.txt');
+		const etag = head.headers.get('ETag') ?? '';
+		const date = head.headers.get('Last-Modified') ?? '';
+		const range = { Range: 'bytes=7-11' };
+		expect((await dav('alice', 'GET', '/hello.txt', { ...range, 'If-Range': etag })).status).toBe(206);
+		expect((await dav('alice', 'GET', '/hello.txt', { ...range, 'If-Range': date })).status).toBe(206);
+		const stale = await dav('alice', 'GET', '/hello.txt', { ...range, 'If-Range': '"stale"' });
+		expect(stale.status).toBe(200);
+		expect(await stale.text()).toBe('Hello, world!');
+		expect((await dav('alice', 'GET', '/hello.txt', { ...range, 'If-Range': `W/${etag}` })).status).toBe(200);
+		expect((await dav('alice', 'GET', '/hello.txt', { ...range, 'If-None-Match': etag })).status).toBe(304);
+	});
+
 	it('revalidates with If-None-Match', async () => {
 		const etag = (await dav('alice', 'HEAD', '/hello.txt')).headers.get('ETag') ?? '';
 		const response = await dav('alice', 'GET', '/hello.txt', { 'If-None-Match': etag });
@@ -84,6 +98,10 @@ describe('GET / HEAD', () => {
 		const response = await dav('alice', 'HEAD', '/hello.txt');
 		expect(response.status).toBe(200);
 		expect(response.headers.get('Content-Length')).toBe('13');
+
+		const etag = response.headers.get('ETag') ?? '';
+		expect((await dav('alice', 'HEAD', '/hello.txt', { 'If-None-Match': etag })).status).toBe(304);
+		expect((await dav('alice', 'HEAD', '/hello.txt', { 'If-Match': '"stale"' })).status).toBe(412);
 	});
 
 	it('lists directories as HTML', async () => {

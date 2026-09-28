@@ -1,5 +1,6 @@
+import { failedPrecondition, lastModified } from './conditions';
 import { HttpError } from './http';
-import { dirExists, displayName, href, listDir, objectKey, type Target } from './storage';
+import { dirExists, displayName, href, listDir, objectKey, type Entry, type Target } from './storage';
 import { escapeXml } from './xml';
 
 function fileHeaders(object: R2Object): Headers {
@@ -32,6 +33,13 @@ function parseRange(header: string, size: number): ByteRange | 'unsatisfiable' |
 	return { start, end: last === '' ? size - 1 : Math.min(Number(last), size - 1) };
 }
 
+/** If-Range (RFC 9110 §13.1.5): unless a strong etag or the exact date matches, the whole file is served. */
+function ifRangeHolds(value: string | null, object: R2Object): boolean {
+	if (value === null) return true;
+	const validator = value.trim();
+	return validator.startsWith('"') ? validator === object.httpEtag : Date.parse(validator) === lastModified(object);
+}
+
 function fileResponse(request: Request, object: R2Object | R2ObjectBody, range: ByteRange | null): Response {
 	const headers = fileHeaders(object);
 	if (!('body' in object)) {
@@ -61,28 +69,40 @@ async function dirListing(bucket: R2Bucket, user: string, path: string[]): Promi
 export async function handleGet(request: Request, bucket: R2Bucket, user: string, target: Target): Promise<Response> {
 	if (!target.wantsDir && target.path.length > 0) {
 		const key = objectKey(user, target.path);
-		// Ranges are resolved here against the size, since R2 does not reject unsatisfiable ones consistently.
 		const rangeHeader = request.headers.get('Range');
-		const size = rangeHeader === null ? undefined : (await bucket.head(key))?.size;
-		const range = rangeHeader === null || size === undefined ? null : parseRange(rangeHeader, size);
-		if (range === 'unsatisfiable') {
-			return new Response(null, { status: 416, headers: { 'Content-Range': `bytes */${String(size)}` } });
+		// Ranges are resolved here against the size, since R2 does not reject unsatisfiable ones consistently.
+		const current = rangeHeader === null ? null : await bucket.head(key);
+		if (current && rangeHeader !== null) {
+			const failed = failedPrecondition(request.headers, { type: 'file', path: target.path, object: current }, true);
+			if (failed !== null) return new Response(null, { status: failed, headers: fileHeaders(current) });
+			const range = ifRangeHolds(request.headers.get('If-Range'), current) ? parseRange(rangeHeader, current.size) : null;
+			if (range === 'unsatisfiable') {
+				return new Response(null, { status: 416, headers: { 'Content-Range': `bytes */${String(current.size)}` } });
+			}
+			if (range) {
+				const object = await bucket.get(key, {
+					onlyIf: { etagMatches: current.etag },
+					range: { offset: range.start, length: range.end - range.start + 1 },
+				});
+				// A file changed since its size was read is served whole instead.
+				if (object && 'body' in object) return fileResponse(request, object, range);
+			}
 		}
-		const object = await bucket.get(key, {
-			onlyIf: request.headers,
-			range: range ? { offset: range.start, length: range.end - range.start + 1 } : undefined,
-		});
-		if (object) return fileResponse(request, object, range);
+		const object = await bucket.get(key, { onlyIf: request.headers });
+		if (object) return fileResponse(request, object, null);
 	}
 	if (await dirExists(bucket, user, target.path)) return dirListing(bucket, user, target.path);
 	throw new HttpError(404);
 }
 
-export async function handleHead(bucket: R2Bucket, user: string, target: Target): Promise<Response> {
+export async function handleHead(request: Request, bucket: R2Bucket, user: string, target: Target): Promise<Response> {
 	if (!target.wantsDir && target.path.length > 0) {
 		const object = await bucket.head(objectKey(user, target.path));
 		if (object) {
 			const headers = fileHeaders(object);
+			const entry: Entry = { type: 'file', path: target.path, object };
+			const failed = failedPrecondition(request.headers, entry, true);
+			if (failed !== null) return new Response(null, { status: failed, headers });
 			headers.set('Content-Length', String(object.size));
 			return new Response(null, { headers });
 		}

@@ -217,15 +217,16 @@ export async function handleCopyMove(request: Request, bucket: R2Bucket, user: s
 	]);
 	const guard = groups ? (existing?.type === 'file' ? existing.object : null) : undefined;
 	const lockId = appliedToken(groups, dest.path, existing)?.id;
-	if (existing && !replacesFile) {
-		if (existing.type === 'file') await bucket.delete(existing.object.key);
-		else await deleteTree(bucket, user, existing.path);
-	}
+	// The replaced destination is removed after the copy, so a failure part-way leaves it in place rather than lost.
+	let stale: string[] = [];
+	if (existing?.type === 'dir') stale = (await listTree(bucket, user, existing.path)).map((object) => object.key);
+	else if (existing && !replacesFile) stale = [existing.object.key];
+	const written = new Set<string>();
 
 	if (source.type === 'file') {
 		const { key, etag } = source.object;
-		const written = await copyObject(bucket, key, objectKey(user, dest.path), replacesFile ? guard : null, lockId, { etagMatches: etag });
-		if (!written) throw new HttpError(412);
+		const copied = await copyObject(bucket, key, objectKey(user, dest.path), replacesFile ? guard : null, lockId, { etagMatches: etag });
+		if (!copied) throw new HttpError(412);
 		if (move) {
 			// R2 deletes cannot be conditional; a source changed since the copy is kept, leaving both.
 			if ((await bucket.head(key))?.etag !== etag) throw new HttpError(412);
@@ -235,7 +236,12 @@ export async function handleCopyMove(request: Request, bucket: R2Bucket, user: s
 		const objects = depth === '0' ? [] : await listTree(bucket, user, source.path);
 		const fromPrefix = dirPrefix(user, source.path);
 		const toPrefix = dirPrefix(user, dest.path);
-		for (const object of objects) await copyObject(bucket, object.key, toPrefix + object.key.slice(fromPrefix.length), undefined);
+		for (const object of objects) {
+			const key = toPrefix + object.key.slice(fromPrefix.length);
+			await copyObject(bucket, object.key, key, undefined);
+			written.add(key);
+		}
+		written.add(toPrefix);
 		await keepDir(bucket, user, dest.path);
 		if (move)
 			await deleteKeys(
@@ -243,6 +249,10 @@ export async function handleCopyMove(request: Request, bucket: R2Bucket, user: s
 				objects.map((object) => object.key),
 			);
 	}
+	await deleteKeys(
+		bucket,
+		stale.filter((key) => !written.has(key)),
+	);
 	if (move) await keepDir(bucket, user, source.path.slice(0, -1));
 	return new Response(null, { status: existing ? 204 : 201 });
 }

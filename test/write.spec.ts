@@ -136,6 +136,21 @@ describe('COPY / MOVE', () => {
 		expect((await dav('erin', 'MOVE', '/e/', to('/e/inside/'))).status).toBe(403);
 	});
 
+	it('replaces destinations with exactly the source', async () => {
+		await env.BUCKET.put('erin/r1/a.txt', 'new a');
+		await env.BUCKET.put('erin/r2/a.txt', 'old a');
+		await env.BUCKET.put('erin/r2/old.txt', 'old');
+		expect((await dav('erin', 'COPY', '/r1/', to('/r2/'))).status).toBe(204);
+		const keys = (await env.BUCKET.list({ prefix: 'erin/r2/' })).objects.map((object) => object.key);
+		expect(keys.sort()).toEqual(['erin/r2/', 'erin/r2/a.txt']);
+		expect(await read('erin', '/r2/a.txt')).toBe('new a');
+
+		await env.BUCKET.put('erin/r3.txt', 'file');
+		expect((await dav('erin', 'MOVE', '/r3.txt', to('/r2'))).status).toBe(204);
+		expect(await read('erin', '/r2')).toBe('file');
+		expect((await env.BUCKET.list({ prefix: 'erin/r2/' })).objects).toEqual([]);
+	});
+
 	it('refuses to overwrite an ancestor of the source', async () => {
 		await env.BUCKET.put('erin/anc/b/file', 'f');
 		await env.BUCKET.put('erin/anc/sibling', 's');

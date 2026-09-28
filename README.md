@@ -4,7 +4,9 @@ A multi-user WebDAV server on Cloudflare Workers, storing files in R2.
 
 Each user is confined to their own `<username>/` prefix in the bucket, and keys mirror paths one-to-one, so the bucket can also be managed with any S3 tool. Passwords are derived from the username and a server secret, so there is no user database: the admin mints as many users as they like.
 
-Locks are stateless: `LOCK` always succeeds, and a save under a lock fails with `412` if someone else changed the file since. This prevents lost updates without storing any lock state.
+Locks are stateless, so nothing besides R2 is needed: `LOCK` always succeeds, and a save under a lock fails with `412` if someone else changed the file since. This keeps clients that lock from overwriting each other's changes, but a client that does not lock can still overwrite a locked file.
+
+Uploads are capped by Cloudflare's request body limit (100 MB on the Free and Pro plans), and copying or moving a folder takes two R2 operations per file, within the Worker's subrequest limit.
 
 ## Deploy
 

@@ -29,7 +29,7 @@ async function handle(request: Request, env: Env): Promise<Response> {
 		case 'GET':
 			return handleGet(request, bucket, user, target);
 		case 'HEAD':
-			return handleHead(bucket, user, target);
+			return handleHead(request, bucket, user, target);
 		case 'PROPFIND':
 			return handlePropfind(request, bucket, user, target);
 		case 'PROPPATCH':

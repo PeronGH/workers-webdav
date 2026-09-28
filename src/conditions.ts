@@ -138,28 +138,39 @@ function etagList(value: string): string[] {
 	return value.split(',').map((etag) => etag.trim());
 }
 
+/** An object's modification time as HTTP dates see it, with second precision. */
+export function lastModified(object: R2Object): number {
+	return Math.floor(object.uploaded.getTime() / 1000) * 1000;
+}
+
 /**
- * Evaluates If-Match (strong), If-Unmodified-Since and If-None-Match (weak) for a write to `entry`, in RFC 9110
- * §13.2.2 order, failing with 412. Returns whether any were present.
+ * The status a request fails with under RFC 9110 §13.2.2 preconditions on `entry`, or null if they pass. `read` is
+ * for GET and HEAD, which answer 304 rather than 412 to If-None-Match, and also honour If-Modified-Since.
  */
-export function checkPreconditions(headers: Headers, entry: Entry | null): boolean {
+export function failedPrecondition(headers: Headers, entry: Entry | null, read = false): 304 | 412 | null {
 	const etag = entry?.type === 'file' ? entry.object.httpEtag : undefined;
+	const modified = entry?.type === 'file' ? lastModified(entry.object) : undefined;
 	const ifMatch = headers.get('If-Match');
 	const ifUnmodifiedSince = headers.get('If-Unmodified-Since');
 	const ifNoneMatch = headers.get('If-None-Match');
+	const ifModifiedSince = headers.get('If-Modified-Since');
 	if (ifMatch !== null) {
-		if (!entry || (ifMatch.trim() !== '*' && (etag === undefined || !etagList(ifMatch).includes(etag)))) throw new HttpError(412);
-	} else if (ifUnmodifiedSince !== null && entry?.type === 'file') {
-		const date = Date.parse(ifUnmodifiedSince);
-		// HTTP dates have second precision.
-		if (Math.floor(entry.object.uploaded.getTime() / 1000) * 1000 > date) throw new HttpError(412);
+		if (!entry || (ifMatch.trim() !== '*' && (etag === undefined || !etagList(ifMatch).includes(etag)))) return 412;
+	} else if (ifUnmodifiedSince !== null && modified !== undefined && modified > Date.parse(ifUnmodifiedSince)) {
+		return 412;
 	}
-	if (
-		ifNoneMatch !== null &&
-		entry &&
-		(ifNoneMatch.trim() === '*' || (etag !== undefined && etagList(ifNoneMatch).map(weak).includes(weak(etag))))
-	) {
-		throw new HttpError(412);
+	if (ifNoneMatch !== null) {
+		const matches = ifNoneMatch.trim() === '*' || (etag !== undefined && etagList(ifNoneMatch).map(weak).includes(weak(etag)));
+		if (entry && matches) return read ? 304 : 412;
+	} else if (read && ifModifiedSince !== null && modified !== undefined && modified <= Date.parse(ifModifiedSince)) {
+		return 304;
 	}
-	return ifMatch !== null || ifUnmodifiedSince !== null || ifNoneMatch !== null;
+	return null;
+}
+
+/** Checks the preconditions of a write to `entry`, failing with 412; returns whether there were any. */
+export function checkPreconditions(headers: Headers, entry: Entry | null): boolean {
+	const failed = failedPrecondition(headers, entry);
+	if (failed !== null) throw new HttpError(failed);
+	return headers.has('If-Match') || headers.has('If-Unmodified-Since') || headers.has('If-None-Match');
 }
