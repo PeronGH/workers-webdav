@@ -1,5 +1,5 @@
+import { appliedToken, checkIf, checkPreconditions } from './conditions';
 import { ALLOW, HttpError } from './http';
-import { lockPermits, lockTokens } from './lock';
 import {
 	CREATE_ONLY,
 	deleteKeys,
@@ -11,6 +11,7 @@ import {
 	objectKey,
 	parseTarget,
 	stat,
+	type Entry,
 	type Target,
 } from './storage';
 
@@ -90,37 +91,6 @@ function withLock(customMetadata: Record<string, string> | undefined, lockId: st
 	return lockId === undefined ? metadata : { ...metadata, lock: lockId };
 }
 
-function etagList(value: string): string[] {
-	return value.split(',').map((etag) => etag.trim().replace(/^W\//, ''));
-}
-
-function clientConditionsPass(headers: Headers, object: R2Object | null): boolean {
-	const ifMatch = headers.get('If-Match');
-	if (ifMatch !== null && !(object && (ifMatch.trim() === '*' || etagList(ifMatch).includes(object.httpEtag)))) return false;
-	const ifNoneMatch = headers.get('If-None-Match');
-	return !(ifNoneMatch !== null && object && (ifNoneMatch.trim() === '*' || etagList(ifNoneMatch).includes(object.httpEtag)));
-}
-
-/**
- * Decides whether a write to `path` may replace `existing`, from lock tokens in the If header and, for the
- * request URI, the client's own If-Match / If-None-Match. Conditional writes are guarded against races.
- */
-function writeConditions(
-	request: Request,
-	path: string[],
-	isRequestUri: boolean,
-	existing: R2Object | null,
-): { guard: Guard; lockId?: string } {
-	const conditional = isRequestUri && (request.headers.has('If-Match') || request.headers.has('If-None-Match'));
-	if (conditional && !clientConditionsPass(request.headers, existing)) throw new HttpError(412);
-
-	const tokens = lockTokens(request, path, isRequestUri);
-	if (tokens === null) return { guard: conditional ? existing : undefined };
-	const token = tokens.find((candidate) => lockPermits(candidate, existing));
-	if (!token) throw new HttpError(412);
-	return { guard: existing, lockId: token.id };
-}
-
 export async function handlePut(request: Request, bucket: R2Bucket, user: string, target: Target): Promise<Response> {
 	if (target.wantsDir || target.path.length === 0) throw new HttpError(405, null, { Allow: ALLOW });
 	const key = objectKey(user, target.path);
@@ -132,12 +102,15 @@ export async function handlePut(request: Request, bucket: R2Bucket, user: string
 	if (isDir) throw new HttpError(405, null, { Allow: ALLOW });
 	if (!parentExists) throw new HttpError(409);
 
-	const { guard, lockId } = writeConditions(request, target.path, true, existing);
+	const entry: Entry | null = existing && { type: 'file', path: target.path, object: existing };
+	const conditional = checkPreconditions(request.headers, entry);
+	const groups = await checkIf(request, bucket, user, [[target.path, entry]]);
 	const contentType = request.headers.get('Content-Type');
 	const options: WriteOptions = {
-		guard,
+		// Whatever the conditions were checked against must still be current when the write lands.
+		guard: conditional || groups ? existing : undefined,
 		httpMetadata: contentType ? { contentType } : undefined,
-		customMetadata: withLock(existing?.customMetadata, lockId),
+		customMetadata: withLock(existing?.customMetadata, appliedToken(groups, target.path, entry)?.id),
 	};
 	const written =
 		request.headers.has('Content-Length') || request.body === null
@@ -151,17 +124,14 @@ export async function handleDelete(request: Request, bucket: R2Bucket, user: str
 	if (target.path.length === 0) throw new HttpError(403);
 	const entry = await stat(bucket, user, target);
 	if (!entry) throw new HttpError(404);
+	const depth = request.headers.get('Depth');
+	if (entry.type === 'dir' && depth !== null && depth !== 'infinity') throw new HttpError(400);
+	checkPreconditions(request.headers, entry);
+	await checkIf(request, bucket, user, [[entry.path, entry]]);
 
-	if (entry.type === 'file') {
-		// DELETE cannot be conditional in R2, so this check races with concurrent writers.
-		const tokens = lockTokens(request, entry.path, true);
-		if (tokens && !tokens.some((token) => lockPermits(token, entry.object))) throw new HttpError(412);
-		await bucket.delete(entry.object.key);
-	} else {
-		const depth = request.headers.get('Depth');
-		if (depth !== null && depth !== 'infinity') throw new HttpError(400);
-		await deleteTree(bucket, user, entry.path);
-	}
+	// DELETE cannot be conditional in R2, so the checks above race with concurrent writers.
+	if (entry.type === 'file') await bucket.delete(entry.object.key);
+	else await deleteTree(bucket, user, entry.path);
 	await keepDir(bucket, user, entry.path.slice(0, -1));
 	return new Response(null, { status: 204 });
 }
@@ -175,9 +145,18 @@ export async function handleMkcol(bucket: R2Bucket, user: string, target: Target
 	return new Response(null, { status: 201 });
 }
 
-async function copyObject(bucket: R2Bucket, from: string, to: string, guard: Guard, lockId?: string): Promise<R2Object | null> {
-	const object = await bucket.get(from);
+/** Copies `from` to `to`; `onlyIf` makes the source read conditional, failing with 412. */
+async function copyObject(
+	bucket: R2Bucket,
+	from: string,
+	to: string,
+	guard: Guard,
+	lockId?: string,
+	onlyIf?: R2Conditional,
+): Promise<R2Object | null> {
+	const object = await bucket.get(from, { onlyIf });
 	if (!object) throw new HttpError(404);
+	if (!('body' in object)) throw new HttpError(412);
 	return bucket.put(
 		to,
 		object.body,
@@ -230,16 +209,28 @@ export async function handleCopyMove(request: Request, bucket: R2Bucket, user: s
 	if (existing && request.headers.get('Overwrite')?.trim().toUpperCase() === 'F') throw new HttpError(412);
 
 	const replacesFile = existing?.type === 'file' && source.type === 'file';
-	const { guard, lockId } = writeConditions(request, dest.path, false, existing?.type === 'file' ? existing.object : null);
+	// If-Match and friends apply to the source only (RFC 4918 §10.6); the destination is guarded by If header lists.
+	checkPreconditions(request.headers, source);
+	const groups = await checkIf(request, bucket, user, [
+		[source.path, source],
+		[dest.path, existing],
+	]);
+	const guard = groups ? (existing?.type === 'file' ? existing.object : null) : undefined;
+	const lockId = appliedToken(groups, dest.path, existing)?.id;
 	if (existing && !replacesFile) {
 		if (existing.type === 'file') await bucket.delete(existing.object.key);
 		else await deleteTree(bucket, user, existing.path);
 	}
 
 	if (source.type === 'file') {
-		const written = await copyObject(bucket, source.object.key, objectKey(user, dest.path), replacesFile ? guard : null, lockId);
+		const { key, etag } = source.object;
+		const written = await copyObject(bucket, key, objectKey(user, dest.path), replacesFile ? guard : null, lockId, { etagMatches: etag });
 		if (!written) throw new HttpError(412);
-		if (move) await bucket.delete(source.object.key);
+		if (move) {
+			// R2 deletes cannot be conditional; a source changed since the copy is kept, leaving both.
+			if ((await bucket.head(key))?.etag !== etag) throw new HttpError(412);
+			await bucket.delete(key);
+		}
 	} else {
 		const objects = depth === '0' ? [] : await listTree(bucket, user, source.path);
 		const fromPrefix = dirPrefix(user, source.path);

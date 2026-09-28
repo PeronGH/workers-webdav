@@ -9,9 +9,9 @@ async function read(user: string, path: string): Promise<string | null> {
 	return (await env.BUCKET.get(`${user}${path}`))?.text() ?? null;
 }
 
-async function lock(user: string, path: string): Promise<string> {
+async function lock(user: string, path: string, status = 200): Promise<string> {
 	const response = await dav(user, 'LOCK', path, { Timeout: 'Second-600' }, LOCK_BODY);
-	expect(response.status).toBe(200);
+	expect(response.status).toBe(status);
 	return /^<(.+)>$/.exec(response.headers.get('Lock-Token') ?? '')?.[1] ?? '';
 }
 
@@ -46,6 +46,25 @@ describe('PUT', () => {
 		const etag = (await dav('carol', 'HEAD', '/cond.txt')).headers.get('ETag') ?? '';
 		expect((await dav('carol', 'PUT', '/cond.txt', { 'If-Match': etag }, 'v2')).status).toBe(204);
 		expect(await read('carol', '/cond.txt')).toBe('v2');
+
+		expect((await dav('carol', 'PUT', '/cond.txt', { 'If-Match': `W/${etag}` }, 'v3')).status).toBe(412);
+		const past = 'Sat, 01 Jan 2000 00:00:00 GMT';
+		expect((await dav('carol', 'PUT', '/cond.txt', { 'If-Unmodified-Since': past }, 'v3')).status).toBe(412);
+		expect(await read('carol', '/cond.txt')).toBe('v2');
+	});
+
+	it('evaluates entity tags and Not in the If header', async () => {
+		await dav('carol', 'PUT', '/if.txt', {}, 'v1');
+		const etag = (await dav('carol', 'HEAD', '/if.txt')).headers.get('ETag') ?? '';
+		expect((await dav('carol', 'PUT', '/if.txt', { If: '(["stale"])' }, 'v2')).status).toBe(412);
+		expect((await dav('carol', 'PUT', '/if.txt', { If: '(["stale"]) (Not ["other"])' }, 'v2')).status).toBe(204);
+		const current = (await dav('carol', 'HEAD', '/if.txt')).headers.get('ETag') ?? '';
+		expect(current).not.toBe(etag);
+		expect((await dav('carol', 'PUT', '/if.txt', { If: `([${etag}])` }, 'v3')).status).toBe(412);
+		expect((await dav('carol', 'PUT', '/if.txt', { If: `</if.txt> ([${current}])` }, 'v3')).status).toBe(204);
+		expect((await dav('carol', 'PUT', '/new-if.txt', { If: '(Not <DAV:no-lock>)' }, 'x')).status).toBe(201);
+		expect((await dav('carol', 'PUT', '/if.txt', { If: '(["unterminated"' }, 'v4')).status).toBe(400);
+		expect(await read('carol', '/if.txt')).toBe('v3');
 	});
 });
 
@@ -71,6 +90,12 @@ describe('MKCOL / DELETE', () => {
 		expect((await dav('dave', 'DELETE', '/tree/')).status).toBe(404);
 		expect((await dav('dave', 'DELETE', '/')).status).toBe(403);
 	});
+
+	it('honours If-Match', async () => {
+		await env.BUCKET.put('dave/keep.txt', 'k');
+		expect((await dav('dave', 'DELETE', '/keep.txt', { 'If-Match': '"stale"' })).status).toBe(412);
+		expect(await read('dave', '/keep.txt')).toBe('k');
+	});
 });
 
 describe('COPY / MOVE', () => {
@@ -93,6 +118,13 @@ describe('COPY / MOVE', () => {
 		expect((await dav('erin', 'COPY', '/x.txt', { ...to('/y.txt'), Overwrite: 'F' })).status).toBe(412);
 		expect((await dav('erin', 'COPY', '/x.txt', to('/y.txt'))).status).toBe(204);
 		expect(await read('erin', '/y.txt')).toBe('x');
+	});
+
+	it('applies If-Match to the source', async () => {
+		await env.BUCKET.put('erin/stay.txt', 's');
+		expect((await dav('erin', 'MOVE', '/stay.txt', { ...to('/gone.txt'), 'If-Match': '"stale"' })).status).toBe(412);
+		expect(await read('erin', '/stay.txt')).toBe('s');
+		expect(await read('erin', '/gone.txt')).toBeNull();
 	});
 
 	it('moves collections recursively', async () => {
@@ -155,13 +187,17 @@ describe('LOCK', () => {
 		expect((await dav('frank', 'PUT', '/both.txt', { If: `(<${a}>)` }, 'a2')).status).toBe(204);
 	});
 
-	it('locks unmapped URLs for creation', async () => {
-		const token = await lock('frank', '/fresh.txt');
-		expect((await dav('frank', 'PUT', '/fresh.txt', { If: `(<${token}>)` }, 'mine')).status).toBe(201);
+	it('creates an empty file when locking an unmapped URL', async () => {
+		const token = await lock('frank', '/fresh.txt', 201);
+		expect(await read('frank', '/fresh.txt')).toBe('');
+		expect((await dav('frank', 'PUT', '/fresh.txt', { If: `(<${token}>)` }, 'mine')).status).toBe(204);
 
-		const late = await lock('frank', '/race.txt');
+		const late = await lock('frank', '/race.txt', 201);
 		await env.BUCKET.put('frank/race.txt', 'someone else');
 		expect((await dav('frank', 'PUT', '/race.txt', { If: `(<${late}>)` }, 'mine')).status).toBe(412);
+
+		expect((await dav('frank', 'LOCK', '/nodir/x.txt', {}, LOCK_BODY)).status).toBe(409);
+		expect((await dav('frank', 'LOCK', '/fresh.txt', { Depth: '1' }, LOCK_BODY)).status).toBe(400);
 	});
 
 	it('rejects tokens it did not issue', async () => {
@@ -194,6 +230,9 @@ describe('LOCK', () => {
 		expect(response.status).toBe(200);
 		expect(response.headers.has('Lock-Token')).toBe(false);
 		expect(await response.text()).toContain(token);
+
+		await env.BUCKET.put('frank/refresh.txt', 'changed elsewhere');
+		expect((await dav('frank', 'LOCK', '/refresh.txt', { If: `(<${token}>)` })).status).toBe(412);
 	});
 
 	it('advertises lock support in PROPFIND', async () => {
