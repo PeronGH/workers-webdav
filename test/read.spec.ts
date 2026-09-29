@@ -104,12 +104,10 @@ describe('GET / HEAD', () => {
 		expect((await dav('alice', 'HEAD', '/hello.txt', { 'If-Match': '"stale"' })).status).toBe(412);
 	});
 
-	it('lists directories as HTML', async () => {
-		const response = await dav('alice', 'GET', '/');
-		const html = await response.text();
+	it('serves the file browser for directories', async () => {
+		const response = await dav('alice', 'GET', '/docs/');
 		expect(response.headers.get('Content-Type')).toContain('text/html');
-		expect(html).toContain('href="/hello.txt"');
-		expect(html).toContain('href="/docs/"');
+		expect(await response.text()).toContain('src="/_ui/webdav.js"');
 	});
 
 	it('returns 404 for missing paths', async () => {
@@ -152,6 +150,12 @@ describe('PROPFIND', () => {
 		const xml = await (await dav('alice', 'PROPFIND', '/hello.txt', { Depth: '0' }, body)).text();
 		expect(xml).toMatch(/<D:propstat><D:prop><D:getetag>&quot;.+&quot;<\/D:getetag><\/D:prop><D:status>HTTP\/1.1 200 OK<\/D:status>/);
 		expect(xml).toContain('<D:prop><x:color xmlns:x="urn:z"/><D:creationdate/></D:prop><D:status>HTTP/1.1 404 Not Found</D:status>');
+	});
+
+	it('reports ownCloud permissions for the web UI', async () => {
+		const body = '<propfind xmlns="DAV:" xmlns:oc="http://owncloud.org/ns"><prop><oc:permissions/></prop></propfind>';
+		const xml = await (await dav('alice', 'PROPFIND', '/', { Depth: '1' }, body)).text();
+		for (const permissions of ['GCK', 'GCKDNV', 'GWDNV']) expect(xml).toContain(`>${permissions}</x:permissions>`);
 	});
 
 	it('returns property names for propname', async () => {

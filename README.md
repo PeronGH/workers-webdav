@@ -38,6 +38,8 @@ rclone lsf --webdav-url https://webdav.<account>.workers.dev \
 
 In macOS Finder, use **Go › Connect to Server**; in Windows Explorer, use **Map network drive**.
 
+Opening the Worker URL in a browser shows [webdav-manager.js](https://github.com/kd2org/webdav-manager.js), vendored in `public/_ui/`. To update it, run `bun run update-ui`; it fetches a pinned commit, and `WEBDAV_MANAGER_REF=<commit>` fetches another.
+
 ## Develop
 
 Put `AUTH_SECRET=<anything>` in `.dev.vars`, then:

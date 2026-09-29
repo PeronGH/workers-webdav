@@ -1,7 +1,6 @@
 import { failedPrecondition, lastModified } from './conditions';
 import { HttpError } from './http';
-import { dirExists, displayName, href, listDir, objectKey, type Entry, type Target } from './storage';
-import { escapeXml } from './xml';
+import { dirExists, objectKey, type Entry, type Target } from './storage';
 
 function fileHeaders(object: R2Object): Headers {
 	const headers = new Headers();
@@ -53,17 +52,23 @@ function fileResponse(request: Request, object: R2Object | R2ObjectBody, range: 
 	return new Response(object.body, { headers });
 }
 
-async function dirListing(bucket: R2Bucket, user: string, path: string[]): Promise<Response> {
-	const entries = await listDir(bucket, user, path);
-	const title = escapeXml(`/${path.join('/')}`);
-	const items = entries
-		.map((entry) => {
-			const name = escapeXml(displayName(entry) + (entry.type === 'dir' ? '/' : ''));
-			return `<li><a href="${escapeXml(href(entry))}">${name}</a></li>`;
-		})
-		.join('');
-	const html = `<!doctype html><meta charset="utf-8"><title>${title}</title><h1>${title}</h1><ul>${items}</ul>`;
-	return new Response(html, { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
+/** Directories open in webdav-manager.js (served from `public/_ui/`), which starts at the page's own path. */
+const DIR_PAGE = `<!doctype html>
+<html data-webdav-url="/">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WebDAV</title>
+</head>
+<body>
+<noscript>This file browser requires JavaScript.</noscript>
+<script src="/_ui/webdav.js"></script>
+</body>
+</html>
+`;
+
+function dirPage(): Response {
+	return new Response(DIR_PAGE, { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
 }
 
 export async function handleGet(request: Request, bucket: R2Bucket, user: string, target: Target): Promise<Response> {
@@ -91,7 +96,7 @@ export async function handleGet(request: Request, bucket: R2Bucket, user: string
 		const object = await bucket.get(key, { onlyIf: request.headers });
 		if (object) return fileResponse(request, object, null);
 	}
-	if (await dirExists(bucket, user, target.path)) return dirListing(bucket, user, target.path);
+	if (await dirExists(bucket, user, target.path)) return dirPage();
 	throw new HttpError(404);
 }
 

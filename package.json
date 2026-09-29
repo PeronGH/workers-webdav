@@ -11,7 +11,8 @@
 		"lint": "eslint .",
 		"format": "prettier --write .",
 		"format:check": "prettier --check .",
-		"mint": "bun scripts/mint.ts"
+		"mint": "bun scripts/mint.ts",
+		"update-ui": "curl -fsSL --create-dirs --output-dir public/_ui --remote-name-all \"https://raw.githubusercontent.com/kd2org/webdav-manager.js/${WEBDAV_MANAGER_REF:-955bab5}/{webdav.js,webdav.css,LICENSE}\""
 	},
 	"devDependencies": {
 		"@cloudflare/vitest-plugin": "^1.0.0",

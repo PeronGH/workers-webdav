@@ -4,7 +4,7 @@ import { defineConfig, globalIgnores } from 'eslint/config';
 import tseslint from 'typescript-eslint';
 
 export default defineConfig(
-	globalIgnores(['worker-configuration.d.ts']),
+	globalIgnores(['worker-configuration.d.ts', 'public/_ui']),
 	{
 		files: ['**/*.{js,mjs,ts,mts}'],
 		extends: [js.configs.recommended, tseslint.configs.strictTypeChecked, tseslint.configs.stylisticTypeChecked],

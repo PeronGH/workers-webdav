@@ -41,6 +41,19 @@ function liveProps(entry: Entry): Map<string, string> {
 	return props;
 }
 
+const OC = 'http://owncloud.org/ns';
+
+/** ownCloud permissions, which webdav-manager.js reads to decide what it shows and lets the user do. */
+function ocPermissions(entry: Entry): string {
+	if (entry.type === 'file') return 'GWDNV';
+	return entry.path.length === 0 ? 'GCK' : 'GCKDNV';
+}
+
+function liveProp(entry: Entry, live: Map<string, string>, name: PropName): string | undefined {
+	if (name.namespace === DAV) return live.get(name.local);
+	return name.namespace === OC && name.local === 'permissions' ? ocPermissions(entry) : undefined;
+}
+
 function response(entry: Entry, request: PropfindRequest): string {
 	const live = liveProps(entry);
 	const propstats: string[] = [];
@@ -65,7 +78,7 @@ function response(entry: Entry, request: PropfindRequest): string {
 			const found: string[] = [];
 			const missing: string[] = [];
 			for (const name of request.props) {
-				const value = name.namespace === DAV ? live.get(name.local) : undefined;
+				const value = liveProp(entry, live, name);
 				if (value === undefined) missing.push(propElement(name));
 				else found.push(propElement(name, value));
 			}
