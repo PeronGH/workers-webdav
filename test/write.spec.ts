@@ -29,6 +29,14 @@ describe('PUT', () => {
 		expect((await dav('carol', 'PUT', '/dir/', {}, 'x')).status).toBe(405);
 	});
 
+	it('rejects encoded slashes in names', async () => {
+		await env.BUCKET.put('carol/slash.txt', 's');
+		expect((await dav('carol', 'PUT', '/notes%2F', {}, 'x')).status).toBe(400);
+		expect((await dav('carol', 'PUT', '/a%2Fb', {}, 'x')).status).toBe(400);
+		expect((await dav('carol', 'COPY', '/slash.txt', { Destination: 'https://dav.example/x%2Fy' })).status).toBe(400);
+		expect((await env.BUCKET.list({ prefix: 'carol/notes/' })).objects).toEqual([]);
+	});
+
 	it('accepts chunked bodies, using multipart uploads when large', async () => {
 		const stream = (size: number) => new Blob([new Uint8Array(size).fill(97)]).stream().pipeThrough(new TransformStream());
 		expect((await dav('carol', 'PUT', '/small.bin', {}, stream(1000))).status).toBe(201);

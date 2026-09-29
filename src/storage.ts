@@ -10,18 +10,19 @@ export interface Target {
 }
 
 export function parseTarget(pathname: string): Target {
+	let path: string[];
 	try {
-		return {
-			path: pathname
-				.split('/')
-				.filter((segment) => segment !== '')
-				.map(decodeURIComponent),
-			wantsDir: pathname.endsWith('/'),
-		};
+		path = pathname
+			.split('/')
+			.filter((segment) => segment !== '')
+			.map(decodeURIComponent);
 	} catch (error) {
 		if (error instanceof URIError) throw new HttpError(400);
 		throw error;
 	}
+	// An encoded slash would break the one-to-one mapping of paths to keys, e.g. `a%2F` naming the folder marker `a/`.
+	if (path.some((segment) => segment.includes('/'))) throw new HttpError(400);
+	return { path, wantsDir: pathname.endsWith('/') };
 }
 
 export function objectKey(user: string, path: string[]): string {
