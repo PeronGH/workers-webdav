@@ -18,6 +18,22 @@ import {
 /** R2 parts must be equal in size except the last, and at least 5 MiB. */
 const PART_SIZE = 10 * 1024 * 1024;
 
+/** Workers queue R2 calls beyond six waiting for a response, so more copies at once would only wait. */
+const COPY_CONCURRENCY = 6;
+
+/** Runs `task` over `items`, at most `limit` at a time; after a failure, no new items are started. */
+export async function forEachLimited<T>(items: T[], limit: number, task: (item: T) => Promise<void>): Promise<void> {
+	// The runners share one generator; a runner that throws closes it, which stops the rest.
+	const queue = (function* () {
+		yield* items;
+	})();
+	await Promise.all(
+		Array.from({ length: limit }, async () => {
+			for (const item of queue) await task(item);
+		}),
+	);
+}
+
 /**
  * The state a write expects to replace: `undefined` writes unconditionally, `null` requires the key to be absent,
  * and an object requires its etag to be unchanged.
@@ -236,11 +252,11 @@ export async function handleCopyMove(request: Request, bucket: R2Bucket, user: s
 		const objects = depth === '0' ? [] : await listTree(bucket, user, source.path);
 		const fromPrefix = dirPrefix(user, source.path);
 		const toPrefix = dirPrefix(user, dest.path);
-		for (const object of objects) {
+		await forEachLimited(objects, COPY_CONCURRENCY, async (object) => {
 			const key = toPrefix + object.key.slice(fromPrefix.length);
 			await copyObject(bucket, object.key, key, undefined);
 			written.add(key);
-		}
+		});
 		written.add(toPrefix);
 		await keepDir(bucket, user, dest.path);
 		if (move)

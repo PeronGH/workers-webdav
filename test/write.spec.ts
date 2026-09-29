@@ -1,5 +1,6 @@
 import { env } from 'cloudflare:workers';
 import { describe, expect, it } from 'vitest';
+import { forEachLimited } from '../src/write';
 import { dav, hrefs } from './helpers';
 
 const LOCK_BODY =
@@ -133,6 +134,16 @@ describe('COPY / MOVE', () => {
 		expect((await dav('erin', 'MOVE', '/stay.txt', { ...to('/gone.txt'), 'If-Match': '"stale"' })).status).toBe(412);
 		expect(await read('erin', '/stay.txt')).toBe('s');
 		expect(await read('erin', '/gone.txt')).toBeNull();
+	});
+
+	it('copies and moves folders with many files', async () => {
+		const names = Array.from({ length: 20 }, (_, i) => (i % 2 ? `sub/f${String(i)}.txt` : `f${String(i)}.txt`));
+		for (const name of names) await env.BUCKET.put(`erin/many/${name}`, name);
+		expect((await dav('erin', 'COPY', '/many/', to('/many-copy/'))).status).toBe(201);
+		expect((await dav('erin', 'MOVE', '/many-copy/', to('/many-moved/'))).status).toBe(201);
+		for (const name of names) expect(await read('erin', `/many-moved/${name}`)).toBe(name);
+		expect((await env.BUCKET.list({ prefix: 'erin/many-copy/' })).objects).toEqual([]);
+		expect((await env.BUCKET.list({ prefix: 'erin/many/' })).objects).toHaveLength(20);
 	});
 
 	it('moves collections recursively', async () => {
@@ -286,4 +297,35 @@ describe('PROPPATCH', () => {
 it('rejects unexpected request bodies', async () => {
 	expect((await dav('gina', 'OPTIONS', '/', {}, 'x')).status).toBe(415);
 	expect((await dav('gina', 'MKCOL', '/withbody', {}, 'x')).status).toBe(415);
+});
+
+describe('forEachLimited', () => {
+	const tick = () => new Promise((resolve) => setTimeout(resolve, 1));
+
+	it('runs at most `limit` tasks at a time', async () => {
+		let active = 0;
+		let peak = 0;
+		const done: number[] = [];
+		await forEachLimited([...Array(20).keys()], 6, async (item) => {
+			peak = Math.max(peak, ++active);
+			await tick();
+			active--;
+			done.push(item);
+		});
+		expect(peak).toBe(6);
+		expect(done.sort((a, b) => a - b)).toEqual([...Array(20).keys()]);
+	});
+
+	it('starts no new tasks after a failure', async () => {
+		const started: number[] = [];
+		const run = forEachLimited([...Array(20).keys()], 3, async (item) => {
+			started.push(item);
+			await tick();
+			if (item === 4) throw new Error('boom');
+		});
+		await expect(run).rejects.toThrow('boom');
+		// Long enough for the other runners to get through all remaining items, had they not stopped.
+		await new Promise((resolve) => setTimeout(resolve, 100));
+		expect(started.length).toBeLessThanOrEqual(8);
+	});
 });
