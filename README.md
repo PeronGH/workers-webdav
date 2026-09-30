@@ -6,13 +6,14 @@ Each user is confined to their own `<username>/` prefix in the bucket, and keys 
 
 Locks are stateless, so nothing besides R2 is needed: `LOCK` always succeeds, and a save under a lock fails with `412` if someone else changed the file since. This keeps clients that lock from overwriting each other's changes, but a client that does not lock can still overwrite a locked file.
 
-Uploads are capped by Cloudflare's request body limit (100 MB on the Free and Pro plans), and copying or moving a folder takes two R2 operations per file, within the Worker's subrequest limit.
+Single uploads are capped by Cloudflare's request body limit (100 MB on the Free and Pro plans). Larger files need a client that speaks [Nextcloud's chunked upload](https://docs.nextcloud.com/server/latest/developer_manual/client_apis/WebDAV/chunking.html) (v1), such as rclone below; chunks wait under `.uploads/` in the bucket, where a lifecycle rule removes abandoned ones. Copying or moving a folder takes two R2 operations per file, within the Worker's subrequest limit.
 
 ## Deploy
 
 ```sh
 bun install
 bunx wrangler r2 bucket create workers-webdav
+bunx wrangler r2 bucket lifecycle add workers-webdav expire-uploads .uploads/ --expire-days 1
 openssl rand -base64 32 | bunx wrangler secret put AUTH_SECRET
 bun run deploy
 ```
@@ -34,6 +35,13 @@ Use the Worker URL with the minted username and password, for example with rclon
 ```sh
 rclone lsf --webdav-url https://webdav.<account>.workers.dev \
   --webdav-user alice --webdav-pass "$(rclone obscure <password>)" :webdav:
+```
+
+For uploads larger than the request body limit, point rclone at the Nextcloud-style URL instead, which enables chunked uploads:
+
+```sh
+rclone copy big.iso --webdav-url https://webdav.<account>.workers.dev/remote.php/dav/files/alice \
+  --webdav-vendor nextcloud --webdav-user alice --webdav-pass "$(rclone obscure <password>)" :webdav:
 ```
 
 In macOS Finder, use **Go › Connect to Server**; in Windows Explorer, use **Map network drive**.

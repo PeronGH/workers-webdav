@@ -3,7 +3,8 @@ import { handleGet, handleHead } from './get';
 import { ALLOW, hasBody, HttpError } from './http';
 import { handleLock, handleUnlock } from './lock';
 import { handlePropfind, handleProppatch } from './propfind';
-import { parseTarget } from './storage';
+import { parseTarget, parseUploadPath } from './storage';
+import { handleUpload } from './upload';
 import { handleCopyMove, handleDelete, handleMkcol, handlePut } from './write';
 
 const METHODS = new Set(ALLOW.split(', '));
@@ -24,7 +25,10 @@ async function handle(request: Request, env: Env): Promise<Response> {
 	}
 
 	const bucket = env.BUCKET;
-	const target = parseTarget(new URL(request.url).pathname);
+	const { pathname } = new URL(request.url);
+	const upload = parseUploadPath(pathname, user);
+	if (upload) return handleUpload(request, bucket, user, upload);
+	const target = parseTarget(pathname, user);
 	switch (method) {
 		case 'GET':
 			return handleGet(request, bucket, user, target);

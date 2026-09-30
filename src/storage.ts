@@ -7,9 +7,11 @@ export interface Target {
 	path: string[];
 	/** The request URL ended in `/`, so only a collection can match. */
 	wantsDir: boolean;
+	/** The URL prefix the path was found under, `/remote.php/dav/files/<user>` for Nextcloud-style URLs. */
+	base?: string;
 }
 
-export function parseTarget(pathname: string): Target {
+function decodePath(pathname: string): string[] {
 	let path: string[];
 	try {
 		path = pathname
@@ -22,7 +24,34 @@ export function parseTarget(pathname: string): Target {
 	}
 	// An encoded slash would break the one-to-one mapping of paths to keys, e.g. `a%2F` naming the folder marker `a/`.
 	if (path.some((segment) => segment.includes('/'))) throw new HttpError(400);
-	return { path, wantsDir: pathname.endsWith('/') };
+	return path;
+}
+
+/**
+ * The path below Nextcloud's `/remote.php/dav/<area>/<user>`, or null if `path` is not there. Clients such as
+ * rclone's `nextcloud` vendor expect files at `files` and chunked uploads at `uploads`; other users are forbidden.
+ */
+function nextcloudPath(path: string[], area: 'files' | 'uploads', user: string): string[] | null {
+	if (path.length < 4 || path[0] !== 'remote.php' || path[1] !== 'dav' || path[2] !== area) return null;
+	if (path[3] !== user) throw new HttpError(403);
+	return path.slice(4);
+}
+
+export function parseTarget(pathname: string, user: string): Target {
+	const path = decodePath(pathname);
+	const wantsDir = pathname.endsWith('/');
+	const files = nextcloudPath(path, 'files', user);
+	return files ? { path: files, wantsDir, base: `/remote.php/dav/files/${user}` } : { path, wantsDir };
+}
+
+/** The path below the user's Nextcloud uploads collection, or null for other URLs. */
+export function parseUploadPath(pathname: string, user: string): string[] | null {
+	return nextcloudPath(decodePath(pathname), 'uploads', user);
+}
+
+/** Chunked uploads live outside every user's prefix; usernames cannot start with a dot. */
+export function uploadPrefix(user: string, id: string): string {
+	return `.uploads/${user}/${id}/`;
 }
 
 export function objectKey(user: string, path: string[]): string {
@@ -35,9 +64,8 @@ export function dirPrefix(user: string, path: string[]): string {
 
 export const CREATE_ONLY = (): Headers => new Headers({ 'If-None-Match': '*' });
 
-/** Every object below a collection, including its folder marker, at any depth. */
-export async function listTree(bucket: R2Bucket, user: string, path: string[]): Promise<R2Object[]> {
-	const prefix = dirPrefix(user, path);
+/** Every object whose key starts with `prefix`. */
+export async function listPrefix(bucket: R2Bucket, prefix: string): Promise<R2Object[]> {
 	const objects: R2Object[] = [];
 	let cursor: string | undefined;
 	do {
@@ -46,6 +74,11 @@ export async function listTree(bucket: R2Bucket, user: string, path: string[]): 
 		cursor = page.truncated ? page.cursor : undefined;
 	} while (cursor !== undefined);
 	return objects;
+}
+
+/** Every object below a collection, including its folder marker, at any depth. */
+export async function listTree(bucket: R2Bucket, user: string, path: string[]): Promise<R2Object[]> {
+	return listPrefix(bucket, dirPrefix(user, path));
 }
 
 export async function deleteKeys(bucket: R2Bucket, keys: string[]): Promise<void> {
@@ -64,10 +97,10 @@ export async function keepDir(bucket: R2Bucket, user: string, path: string[]): P
 	if (path.length > 0) await bucket.put(dirPrefix(user, path), '', { onlyIf: CREATE_ONLY() });
 }
 
-export function href(entry: Pick<Entry, 'type' | 'path'>): string {
+export function href(entry: Pick<Entry, 'type' | 'path'>, base = ''): string {
 	const encoded = entry.path.map(encodeURIComponent).join('/');
-	if (entry.type === 'file') return `/${encoded}`;
-	return entry.path.length === 0 ? '/' : `/${encoded}/`;
+	if (entry.type === 'file') return `${base}/${encoded}`;
+	return entry.path.length === 0 ? `${base}/` : `${base}/${encoded}/`;
 }
 
 export function displayName(entry: Entry): string {

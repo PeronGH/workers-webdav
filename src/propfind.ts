@@ -54,7 +54,7 @@ function liveProp(entry: Entry, live: Map<string, string>, name: PropName): stri
 	return name.namespace === OC && name.local === 'permissions' ? ocPermissions(entry) : undefined;
 }
 
-function response(entry: Entry, request: PropfindRequest): string {
+function response(entry: Entry, request: PropfindRequest, base?: string): string {
 	const live = liveProps(entry);
 	const propstats: string[] = [];
 	switch (request.type) {
@@ -86,7 +86,7 @@ function response(entry: Entry, request: PropfindRequest): string {
 			if (missing.length > 0) propstats.push(propstat(missing, '404 Not Found'));
 		}
 	}
-	return `<D:response><D:href>${escapeXml(href(entry))}</D:href>${propstats.join('')}</D:response>`;
+	return `<D:response><D:href>${escapeXml(href(entry, base))}</D:href>${propstats.join('')}</D:response>`;
 }
 
 export async function handlePropfind(request: Request, bucket: R2Bucket, user: string, target: Target): Promise<Response> {
@@ -104,7 +104,7 @@ export async function handlePropfind(request: Request, bucket: R2Bucket, user: s
 	}
 
 	const entries = entry.type === 'dir' && depth === '1' ? [entry, ...(await listDir(bucket, user, entry.path))] : [entry];
-	return multistatus(entries.map((e) => response(e, propfind)));
+	return multistatus(entries.map((e) => response(e, propfind, target.base)));
 }
 
 /**
@@ -139,5 +139,5 @@ export async function handleProppatch(request: Request, bucket: R2Bucket, user: 
 				status,
 			),
 		);
-	return multistatus([`<D:response><D:href>${escapeXml(href(entry))}</D:href>${propstats.join('')}</D:response>`]);
+	return multistatus([`<D:response><D:href>${escapeXml(href(entry, target.base))}</D:href>${propstats.join('')}</D:response>`]);
 }

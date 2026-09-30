@@ -40,13 +40,13 @@ export async function forEachLimited<T>(items: T[], limit: number, task: (item: 
  */
 type Guard = R2Object | null | undefined;
 
-interface WriteOptions {
+export interface WriteOptions {
 	guard: Guard;
 	httpMetadata?: R2HTTPMetadata | Headers;
 	customMetadata: Record<string, string>;
 }
 
-function putOptions({ guard, httpMetadata, customMetadata }: WriteOptions): R2PutOptions {
+export function putOptions({ guard, httpMetadata, customMetadata }: WriteOptions): R2PutOptions {
 	return { onlyIf: guard === undefined ? undefined : guard ? { etagMatches: guard.etag } : CREATE_ONLY(), httpMetadata, customMetadata };
 }
 
@@ -73,7 +73,7 @@ async function* parts(stream: ReadableStream<Uint8Array>): AsyncGenerator<Uint8A
  * R2 rejects streams of unknown length, which chunked uploads (such as Finder's) produce. Bodies that fit in one
  * part are written with a single guarded put; larger ones go through a multipart upload.
  */
-async function putUnknownLength(
+export async function putUnknownLength(
 	bucket: R2Bucket,
 	key: string,
 	stream: ReadableStream<Uint8Array>,
@@ -101,7 +101,7 @@ async function putUnknownLength(
 	}
 }
 
-function withLock(customMetadata: Record<string, string> | undefined, lockId: string | undefined): Record<string, string> {
+export function withLock(customMetadata: Record<string, string> | undefined, lockId: string | undefined): Record<string, string> {
 	const metadata = { ...customMetadata };
 	delete metadata.lock;
 	return lockId === undefined ? metadata : { ...metadata, lock: lockId };
@@ -180,7 +180,7 @@ async function copyObject(
 	);
 }
 
-function destinationTarget(request: Request): Target {
+export function destinationTarget(request: Request, user: string): Target {
 	const destination = request.headers.get('Destination');
 	if (destination === null) throw new HttpError(400);
 	let url: URL;
@@ -190,7 +190,7 @@ function destinationTarget(request: Request): Target {
 		throw new HttpError(400);
 	}
 	if (url.host !== new URL(request.url).host) throw new HttpError(502);
-	return parseTarget(url.pathname);
+	return parseTarget(url.pathname, user);
 }
 
 /**
@@ -198,7 +198,7 @@ function destinationTarget(request: Request): Target {
  * copies are therefore bounded by the per-request subrequest limit, and are not atomic.
  */
 export async function handleCopyMove(request: Request, bucket: R2Bucket, user: string, target: Target, move: boolean): Promise<Response> {
-	const dest = destinationTarget(request);
+	const dest = destinationTarget(request, user);
 	const source = await stat(bucket, user, target);
 	if (!source) throw new HttpError(404);
 

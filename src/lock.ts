@@ -45,7 +45,7 @@ export async function handleLock(request: Request, bucket: R2Bucket, user: strin
 		if (!token) throw new HttpError(412);
 		const entry = existing ?? { type: 'file', path: target.path };
 		const depth = entry.type === 'dir' ? 'infinity' : '0';
-		return lockResponse(createToken(token), href(entry), { scope: 'exclusive', owner: '' }, depth, 200, false);
+		return lockResponse(createToken(token), href(entry, target.base), { scope: 'exclusive', owner: '' }, depth, 200, false);
 	}
 
 	const depth = request.headers.get('Depth')?.toLowerCase() ?? 'infinity';
@@ -55,7 +55,7 @@ export async function handleLock(request: Request, bucket: R2Bucket, user: strin
 	const entry = existing ?? created ?? (await stat(bucket, user, target));
 	if (!entry) throw new HttpError(409);
 	const token = createToken({ id: crypto.randomUUID(), etag: entry.type === 'dir' ? COLLECTION : entry.object.etag });
-	return lockResponse(token, href(entry), info, entry.type === 'dir' ? depth : '0', created ? 201 : 200, true);
+	return lockResponse(token, href(entry, target.base), info, entry.type === 'dir' ? depth : '0', created ? 201 : 200, true);
 }
 
 export function handleUnlock(request: Request): Response {

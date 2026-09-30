@@ -40,18 +40,18 @@ interface Group {
 	lists: Condition[][];
 }
 
-function tagResource(url: string, requestUrl: string): Target | null {
+function tagResource(url: string, requestUrl: string, user: string): Target | null {
 	let parsed: URL;
 	try {
 		parsed = new URL(url, requestUrl);
 	} catch {
 		throw new HttpError(400);
 	}
-	return parsed.host === new URL(requestUrl).host ? parseTarget(parsed.pathname) : null;
+	return parsed.host === new URL(requestUrl).host ? parseTarget(parsed.pathname, user) : null;
 }
 
 /** Parses the If header (RFC 4918 §10.4.2); malformed headers are a 400 rather than silently ignored. */
-function parseIf(header: string, requestUrl: string): Group[] {
+function parseIf(header: string, requestUrl: string, user: string): Group[] {
 	const groups: Group[] = [];
 	let tagged: boolean | undefined;
 	let list: Condition[] | null = null;
@@ -65,11 +65,11 @@ function parseIf(header: string, requestUrl: string): Group[] {
 		if (list === null) {
 			if (url !== undefined && tagged !== false) {
 				tagged = true;
-				groups.push({ resource: tagResource(url, requestUrl), lists: [] });
+				groups.push({ resource: tagResource(url, requestUrl, user), lists: [] });
 			} else if (open !== undefined) {
 				if (tagged === undefined) {
 					tagged = false;
-					groups.push({ resource: parseTarget(new URL(requestUrl).pathname), lists: [] });
+					groups.push({ resource: parseTarget(new URL(requestUrl).pathname, user), lists: [] });
 				}
 				list = [];
 			} else throw new HttpError(400);
@@ -110,7 +110,7 @@ export async function checkIf(
 ): Promise<Group[] | null> {
 	const header = request.headers.get('If');
 	if (header === null) return null;
-	const groups = parseIf(header, request.url);
+	const groups = parseIf(header, request.url, user);
 	const entries = new Map(known.map(([path, entry]) => [path.join('/'), entry]));
 	for (const { resource, lists } of groups) {
 		let entry: Entry | null = null;
