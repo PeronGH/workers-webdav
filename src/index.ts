@@ -12,7 +12,8 @@ const BODY_METHODS = new Set(['PROPFIND', 'PROPPATCH', 'PUT', 'LOCK']);
 
 async function handle(request: Request, env: Env): Promise<Response> {
 	const { method } = request;
-	if (!METHODS.has(method)) throw new HttpError(405, null, { Allow: ALLOW });
+	const recalculateHash = method === 'PATCH' && request.headers.has('X-Recalculate-Hash');
+	if (!METHODS.has(method) && !recalculateHash) throw new HttpError(405, null, { Allow: ALLOW });
 	if (!BODY_METHODS.has(method) && hasBody(request)) throw new HttpError(415);
 
 	if (method === 'OPTIONS') {
@@ -23,6 +24,8 @@ async function handle(request: Request, env: Env): Promise<Response> {
 	if (user === null) {
 		throw new HttpError(401, null, { 'WWW-Authenticate': 'Basic realm="WebDAV", charset="UTF-8"' });
 	}
+	// rclone's `nextcloud` vendor asks for a checksum after each upload; answering without one leaves the hash unknown.
+	if (recalculateHash) return new Response(null, { status: 204 });
 
 	const bucket = env.BUCKET;
 	const { pathname } = new URL(request.url);
